@@ -1,0 +1,106 @@
+{
+  "api_keys": {
+    "gemini_api_key": "${GEMINI_API_KEY}",
+    "claude_api_key": "${ANTHROPIC_API_KEY}",
+    "hypefury_api_key": "${HYPEFURY_API_KEY}",
+    "substack_api_key": "${SUBSTACK_API_KEY}",
+    "gumroad_api_key": "${GUMROAD_API_KEY}",
+    "replicate_api_key": "${REPLICATE_API_TOKEN}"
+  },
+  "model_settings": {
+    "gemini": {
+      "model": "gemini-2.5-flash-preview-04-17",
+      "temperature": 0.7,
+      "max_tokens": 1000000
+    },
+    "claude": {
+      "model": "claude-sonnet-4-20250514",
+      "temperature": 0.7,
+      "max_tokens": 64000
+    }
+  },
+  "weekly_content_generation": {
+    "paths": {
+      "research_pdfs_directory": "/Users/vittoriomottini/Dropbox/Personal/Bio-Acc/Campaigns/Immune Dominance/Research",
+      "output_directory": "/Users/vittoriomottini/Dropbox/Personal/Bio-Acc/Campaigns/Immune Dominance/Content",
+      "theme_configs_directory": "themes/"
+    },
+    "current_week": {
+      "theme_name": "immune_dominance",
+      "research_pdf_paths": [
+        "/Users/vittoriomottini/Dropbox/Personal/Bio-Acc/Campaigns/Immune Dominance/Research/Immune Dominance & Resilience_ A Week-Long Deep Dive.pdf"
+      ],
+      "general_theme": "Engineering biological supremacy through systematic immune optimization for high-performing individuals seeking pathogen resistance and longevity enhancement",
+      "daily_focus": {
+        "monday": "Your Inner Army: Understanding Innate & Adaptive Immunity",
+        "tuesday": "Balancing the Force: Th1/Th2/Th17 & Treg Dynamics", 
+        "wednesday": "NK Cells & Cytotoxic Power: Your First Line of Defense",
+        "thursday": "Building Immune Fortitude: Key Nutrients & Lifestyle Factors",
+        "friday": "The Gut-Immune Connection: How Your Microbiome Trains Your Defenses",
+        "saturday": "Advanced Immune Protocols: Peptides, Immunomodulators & Pathogen Defense",
+        "sunday": "Weekly Synthesis: Immune Dominance Architecture"
+      },
+      "master_essay": {
+        "title": "The Immune Fortress: Engineering Biological Supremacy Against Pathogens & Chronic Disease",
+        "focus": "Comprehensive 4000-5000 word guide to immune system optimization covering mechanisms, protocols, and advanced interventions for biological sovereignty",
+        "target_audience": "High-agency individuals seeking systematic immune enhancement"
+      },
+      "gumroad_protocol": {
+        "title": "Immune Dominance Protocol",
+        "subtitle": "A 30-Day System to Engineer Biological Supremacy for High-Performing Individuals Who Refuse Immune Mediocrity",
+        "price_tier": "$97",
+        "focus": "Complete implementation protocol with exact dosing, timing, tracking sheets, and troubleshooting for immune optimization",
+        "target_outcome": "Measurable immune enhancement within 30 days through systematic supplement and lifestyle protocols"
+      },
+      "content_summary": "Complete Bio/Acc immune dominance content suite including 7 Twitter threads, 6 Substack essays (5 daily + 1 flagship), Gumroad-ready protocol package, and Midjourney visual prompts. Focus on mechanistic understanding, precise protocols, and biological sovereignty through immune optimization.",
+      "bio_acc_voice_requirements": {
+        "tone": "Confrontational clarity, zero hedging, mechanistic precision",
+        "themes": ["biological sovereignty", "systematic optimization", "immune dominance", "pathogen resistance"],
+        "avoid": ["motivational fluff", "em-dashes", "hedging language", "medical disclaimers in content"],
+        "include": ["exact dosing", "specific mechanisms", "binary frameworks", "sovereignty messaging"]
+      }
+    },
+    "content_types": {
+      "twitter_threads": {
+        "count": 7,
+        "format": "18 tweets per thread (15 for Sunday synthesis)",
+        "style": "Bio/Acc voice with lowercase, technical precision, sovereignty themes"
+      },
+      "substack_essays": {
+        "daily_essays": {
+          "count": 5,
+          "word_count": "1500-2000 words each",
+          "references": "minimum 5 scientific citations per essay"
+        },
+        "flagship_essay": {
+          "count": 1,
+          "word_count": "4000-5000+ words", 
+          "references": "minimum 20 scientific citations"
+        }
+      },
+      "protocol_packages": {
+        "gumroad_ready": {
+          "main_document": "3000+ words with exact implementation phases",
+          "tracking_sheets": "daily and weekly assessment forms",
+          "quick_reference": "pocket cards and troubleshooting guides",
+          "pricing_structure": "tiered $47/$67/$97 options"
+        }
+      },
+      "midjourney_prompts": {
+        "count": 7,
+        "style": "dark academia, scientific precision, Bio/Acc aesthetics"
+      }
+    },
+    "refinement_settings": {
+      "claude_thread_refinement": {
+        "prompt_name": "THE VIRAL BIOLOGY STORYTELLER",
+        "focus": "Transform threads into viral, engaging stories with scientific accuracy"
+      },
+      "claude_essay_refinement": {
+        "prompt_name": "BIOLOGICAL TRUTH ESSAY SYSTEM", 
+        "focus": "Enhance essays with confrontational clarity and mechanistic precision"
+      },
+      "apply_refinement": true
+    }
+  }
+} 
