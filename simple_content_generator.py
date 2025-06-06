@@ -33,6 +33,7 @@ from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 import PyPDF2
+from difflib import SequenceMatcher
 
 # Updated API imports per user specification
 from google import genai
@@ -90,6 +91,45 @@ class VoiceValidator:
     }
     
     @classmethod
+    def validate_mechanism_density(cls, content: str, content_type: str) -> Tuple[float, List[str]]:
+        """Ensure sufficient biological mechanisms are explained"""
+        word_count = len(content.split())
+        mechanism_indicators = [
+            r'mechanism:',
+            r'→',  # cascade arrows
+            r'pathway',
+            r'cascade',
+            r'activates',
+            r'inhibits',
+            r'phosphorylates',
+            r'triggers',
+            r'binds to',
+            r'upregulates',
+            r'downregulates',
+            r'releases',
+            r'produces',
+            r'signals'
+        ]
+        
+        mechanism_count = sum(len(re.findall(pattern, content, re.IGNORECASE)) 
+                              for pattern in mechanism_indicators)
+        
+        density = mechanism_count / (word_count / 100) if word_count > 0 else 0  # per 100 words
+        
+        if content_type == 'thread':
+            required_density = 2.0
+        else:
+            required_density = 1.5
+        
+        score = min(100, (density / required_density) * 100)
+        issues = []
+        
+        if density < required_density:
+            issues.append(f"Low mechanism density: {density:.1f} per 100 words (need {required_density})")
+        
+        return score, issues
+    
+    @classmethod
     def validate_thread_voice(cls, content: str) -> Tuple[float, List[str]]:
         """Validate thread content against Bio/Acc voice requirements"""
         issues = []
@@ -128,6 +168,12 @@ class VoiceValidator:
         if re.search(cls.THREAD_PATTERNS['forbidden_questions'], content, re.MULTILINE):
             issues.append("Contains question hooks (forbidden)")
             score -= 15
+        
+        # Check mechanism density
+        mechanism_score, mechanism_issues = cls.validate_mechanism_density(content, 'thread')
+        if mechanism_score < 80:
+            issues.extend(mechanism_issues)
+            score -= (100 - mechanism_score) * 0.2
         
         return max(0, score), issues
     
@@ -176,6 +222,12 @@ class VoiceValidator:
             length_penalty = (word_count - 5000) / 100  # 1 point per 100 words over
             issues.append(f"Essay too long: {word_count} words")
             score -= length_penalty
+        
+        # Check mechanism density
+        mechanism_score, mechanism_issues = cls.validate_mechanism_density(content, 'essay')
+        if mechanism_score < 80:
+            issues.extend(mechanism_issues)
+            score -= (100 - mechanism_score) * 0.3
         
         return max(0, score), issues
 
@@ -599,10 +651,136 @@ class VoiceCorrector:
             'evidence indicates': 'evidence proves'
         }
         
+        # Add more aggressive replacements
+        aggressive_replacements = {
+            'research shows': 'mechanism proves',
+            'data suggests': 'data confirms',
+            'has been shown to': 'directly',
+            'is associated with': 'causes',
+            'may lead to': 'creates',
+            'it appears that': '',
+            'interestingly': '',
+            'importantly': '',
+            'furthermore': '',
+            'moreover': '',
+            'in addition': '',
+            'studies have found': 'research proves',
+            'findings suggest': 'data shows',
+            'researchers believe': 'mechanism reveals',
+            'scientists think': 'evidence proves',
+            'appears to be': 'is',
+            'seems to': '',
+            'tends to': '',
+            'likely to': 'will',
+            'potential for': 'capacity to',
+            'possibility of': 'reality of',
+            'it is thought that': '',
+            'it is believed that': '',
+            'it has been suggested': '',
+            'may be': 'is',
+            'could be': 'is',
+            'might be': 'is',
+            'research indicates': 'data proves',
+            'preliminary evidence': 'evidence',
+            'emerging research': 'research',
+            'recent studies': 'studies',
+            'growing body of evidence': 'evidence',
+            'accumulating evidence': 'evidence'
+        }
+        
+        # Apply hedging replacements first
         for old, new in hedging_replacements.items():
             content = re.sub(rf'\b{old}\b', new, content, flags=re.IGNORECASE)
         
+        # Apply aggressive replacements
+        for old, new in aggressive_replacements.items():
+            content = re.sub(rf'\b{old}\b', new, content, flags=re.IGNORECASE)
+        
+        # Remove academic qualifiers
+        academic_removals = [
+            r'\bit should be noted that\b',
+            r'\bit is worth noting that\b',
+            r'\bit is important to note that\b',
+            r'\bit is interesting to note that\b',
+            r'\bnotably,?\s*',
+            r'\binterestingly,?\s*',
+            r'\bimportantly,?\s*',
+            r'\bsignificantly,?\s*',
+            r'\bresearchers found that\b',
+            r'\bscientists discovered that\b'
+        ]
+        
+        for pattern in academic_removals:
+            content = re.sub(pattern, '', content, flags=re.IGNORECASE)
+        
+        # Clean up double spaces
+        content = re.sub(r'\s+', ' ', content)
+        content = re.sub(r'\s*\.\s*\.', '.', content)  # Remove double periods
+        
         return content
+
+class ContentDeduplicator:
+    """Check for content similarity between different days"""
+    
+    @staticmethod
+    def check_cross_day_similarity(content_pieces: List[ContentPiece]) -> Dict[str, float]:
+        """Check similarity between different days' content"""
+        from difflib import SequenceMatcher
+        
+        similarities = {}
+        for i, piece1 in enumerate(content_pieces):
+            for j, piece2 in enumerate(content_pieces[i+1:], i+1):
+                if piece1.type == piece2.type:
+                    content1 = piece1.refined_content or piece1.draft_content
+                    content2 = piece2.refined_content or piece2.draft_content
+                    
+                    if content1 and content2:
+                        # Check first 500 chars (hooks/intros)
+                        similarity = SequenceMatcher(None, 
+                                                   content1[:500].lower(), 
+                                                   content2[:500].lower()).ratio()
+                        
+                        key = f"{piece1.day}-{piece2.day}"
+                        similarities[key] = similarity
+                        
+                        if similarity > 0.7:  # 70% similar
+                            logging.warning(f"High similarity ({similarity:.1%}) between {key}")
+        
+        return similarities
+    
+    @staticmethod
+    def check_hook_repetition(content_pieces: List[ContentPiece]) -> Dict[str, List[str]]:
+        """Check for repeated hook patterns across threads"""
+        hook_patterns = {}
+        repeated_patterns = {}
+        
+        for piece in content_pieces:
+            if piece.type == 'thread':
+                content = piece.refined_content or piece.draft_content
+                if content:
+                    lines = content.split('\n')
+                    # Get the first substantial line (hook)
+                    hook = next((line.strip() for line in lines 
+                               if line.strip() and not line.endswith('/')), '')
+                    
+                    if hook:
+                        # Extract pattern (remove specific numbers/names)
+                        pattern = re.sub(r'\d+%', 'X%', hook)
+                        pattern = re.sub(r'\d+ years', 'X years', pattern)
+                        pattern = re.sub(r'\d+ hours', 'X hours', pattern)
+                        pattern = re.sub(r'\b[A-Z][a-z]+\b', 'NAME', pattern)  # Replace names
+                        
+                        if pattern in hook_patterns:
+                            hook_patterns[pattern].append(piece.day)
+                        else:
+                            hook_patterns[pattern] = [piece.day]
+        
+        # Find patterns used more than once
+        for pattern, days in hook_patterns.items():
+            if len(days) > 1:
+                repeated_patterns[pattern] = days
+                
+        return repeated_patterns
 
 class PromptEngine:
     """Advanced prompt engineering for Bio/Acc content with dynamic context management"""
@@ -933,31 +1111,83 @@ Generate the complete 18-tweet thread about {topic}:
 - Discuss activation vs inhibition balance (activating vs inhibitory receptors)
 - Include vitamin D's role in NK function (VDR expression)
 - Cover "missing self" detection mechanism
-- Address NK cell education in bone marrow""",
+- Address NK cell education in bone marrow
+- Specific biomarkers: CD56, CD16, NKp46, NKG2A
+- Key cytokines: IFN-γ, TNF-α production by NK cells
+- Metabolic requirements: glucose vs fatty acid oxidation in NK cells
+- NK cell trafficking: CXCR3, CCR5 chemokine receptors
+- Degranulation pathway: Rab27a, syntaxin-11, perforin pores
+- Target recognition: stress ligands (MICA, MICB, ULBP)""",
             
             'innate immunity': """
 - Focus on first-line defense mechanisms ONLY
 - MUST mention: TLRs (toll-like receptors), PAMPs, DAMPs
-- Discuss specific TLR pathways (TLR4-LPS, TLR7/8-viral RNA)
-- Cover inflammation resolution (SPMs, resolvins)
+- Specific TLR pathways: TLR4-LPS, TLR7/8-viral RNA, TLR9-CpG DNA
+- Cover inflammation resolution (SPMs, resolvins, protectins)
 - Include barrier function (tight junctions, antimicrobial peptides)
-- Address complement cascade (C3, C5a, MAC formation)""",
+- Address complement cascade (C3, C5a, MAC formation)
+- Key signaling: MyD88, TRIF, IRF3/7, NF-κB pathways
+- Biomarkers: CRP, IL-6, TNF-α, IL-1β levels
+- Metabolic switch: glycolysis in activated macrophages
+- Tissue resident cells: alveolar macrophages, Kupffer cells
+- Pattern recognition: NOD-like receptors, RIG-I-like receptors
+- Antimicrobial mechanisms: ROS, nitric oxide, defensins""",
             
             't-cell': """
 - Focus on T-cell differentiation and function
 - MUST mention: Th1, Th2, Th17, Treg balance specifically
-- Discuss thymic function and T-cell education
-- Cover TCR signaling and co-stimulation (CD28, CTLA-4)
-- Include cytokine signatures (IFN-γ, IL-4, IL-17, IL-10)
-- Address zinc and protein requirements for T-cell function""",
-            
+- Discuss thymic function and T-cell education (positive/negative selection)
+- Cover TCR signaling and co-stimulation (CD28, CTLA-4, PD-1)
+- Include cytokine signatures (IFN-γ, IL-4, IL-17, IL-10, TGF-β)
+- Address zinc and protein requirements for T-cell function
+- T-cell metabolism: glycolysis vs oxidative phosphorylation
+- Transcription factors: T-bet, GATA3, RORγt, FoxP3
+- Migration patterns: CCR4, CCR6, CXCR3 chemokine receptors
+- Memory formation: central vs effector memory phenotypes
+- Exhaustion markers: PD-1, TIM-3, LAG-3 in chronic activation
+- Senescence: CD57, CD28null populations in aging""",
+
             'immune dysregulation': """
 - Focus on when immune system turns against itself
 - MUST mention: autoimmunity, molecular mimicry, epitope spreading
-- Discuss regulatory failure (Treg dysfunction)
-- Cover environmental triggers (LPS, mercury, infections)
-- Include gut barrier breakdown and leaky gut
-- Address systemic inflammation markers (CRP, IL-6)"""
+- Discuss regulatory failure (Treg dysfunction, IL-10 deficiency)
+- Cover environmental triggers (LPS, mercury, infections, stress)
+- Include gut barrier breakdown and leaky gut (zonulin, LPS translocation)
+- Address systemic inflammation markers (CRP, IL-6, TNF-α)
+- HLA associations: specific alleles predisposing to autoimmunity
+- Cytokine storms: IL-1β, IL-6, TNF-α feedback loops
+- Tissue damage: complement activation, immune complex deposition
+- Epigenetic factors: DNA methylation, histone modifications
+- Microbiome dysbiosis: loss of beneficial bacteria, pathobiont expansion
+- Stress axis: HPA dysfunction, cortisol resistance""",
+
+            'gut immunity': """
+- Focus on GALT (gut-associated lymphoid tissue) specifically
+- MUST mention: Peyer's patches, M cells, secretory IgA
+- Discuss microbiome-immune crosstalk (SCFA, butyrate, propionate)
+- Cover intestinal epithelial barrier (tight junctions, mucus layer)
+- Include dendritic cell sampling and antigen presentation
+- Address oral tolerance vs immune activation balance
+- Biomarkers: zonulin, LPS, calprotectin, secretory IgA levels
+- Key bacteria: Bifidobacterium, Lactobacillus, Akkermansia effects
+- Cytokine profiles: IL-10, TGF-β for tolerance vs IL-17, IFN-γ
+- Metabolic products: SCFA effects on Treg differentiation
+- Pathogen resistance: antimicrobial peptides, lysozyme
+- Leaky gut mechanisms: zonulin, claudin proteins""",
+
+            'adaptive immunity': """
+- Focus on B-cell and T-cell coordinated responses
+- MUST mention: antigen presentation, MHC class I/II, immunological memory
+- Discuss germinal center reactions and affinity maturation
+- Cover class switching and somatic hypermutation in B cells
+- Include T-follicular helper cells and B-cell help
+- Address memory B cell vs plasma cell differentiation
+- Biomarkers: specific antibody titers, memory cell phenotypes
+- Cytokine networks: IL-4, IL-21 for B cell help
+- Cross-presentation: dendritic cell processing of exogenous antigens
+- Immunological synapses: TCR-MHC interactions
+- Affinity maturation: somatic hypermutation, selection pressure
+- Long-term immunity: bone marrow plasma cells, memory maintenance"""
         }
         
         # Match partial topics
@@ -1037,7 +1267,7 @@ Generate the complete 18-tweet thread about {topic}:
         
         requirements = {
             'nk cells': """
-- Focus on natural killer cells, NOT T-cells
+- Focus on natural killer cells, NOT T-cells or B-cells
 - Discuss perforin, granzyme mechanisms
 - Cover activation vs inhibition balance
 - Include vitamin D's role in NK function""",
@@ -1587,6 +1817,31 @@ class APIManager:
             logging.error(f"Gemini generation failed for {description}: {str(e)}")
             raise
     
+    async def refine_with_claude_with_retry(self, content: str, content_type: str, 
+                                           description: str, max_retries: int = 3) -> str:
+        """Refine with Claude including retry logic"""
+        for attempt in range(max_retries):
+            try:
+                result = await self.refine_with_claude(content, content_type, description)
+                return result
+            except Exception as e:
+                error_str = str(e).lower()
+                if ("rate_limit" in error_str or "429" in error_str) and attempt < max_retries - 1:
+                    wait_time = 60 * (attempt + 1)  # Exponential backoff
+                    logging.warning(f"Rate limit hit, waiting {wait_time}s before retry {attempt + 2}")
+                    await asyncio.sleep(wait_time)
+                elif "timeout" in error_str and attempt < max_retries - 1:
+                    wait_time = 30 * (attempt + 1)  # Shorter wait for timeouts
+                    logging.warning(f"Timeout occurred, waiting {wait_time}s before retry {attempt + 2}")
+                    await asyncio.sleep(wait_time)
+                else:
+                    # If it's the last attempt or not a recoverable error, raise
+                    logging.error(f"Claude refinement failed on attempt {attempt + 1}: {str(e)}")
+                    if attempt == max_retries - 1:
+                        raise
+        
+        return content  # Fallback to original
+    
     async def refine_with_claude(self, content: str, content_type: str, description: str) -> str:
         """Refine content with Claude using enhanced rate limiting"""
         # Enhanced rate limiting - Claude has strict limits
@@ -2082,6 +2337,10 @@ class BioAccContentGenerator:
             self.logger.info("\n💾 STAGE 3: Saving Content")
             await self._save_all_content(refined_pieces)
             
+            # STAGE 3.5: Quality analysis and deduplication check
+            self.logger.info("\n🔍 STAGE 3.5: Quality Analysis & Deduplication Check")
+            await self._perform_quality_analysis(refined_pieces)
+            
             # STAGE 4: Generate images with Flux
             replicate_token = (
                 os.environ.get('REPLICATE_API_TOKEN') or 
@@ -2561,7 +2820,8 @@ Generate the complete Sunday synthesis thread:
             if piece.day == 'flagship':
                 content_type = 'flagship'
             
-            refined_content = await self.api_manager.refine_with_claude(
+            # Use retry logic for better reliability
+            refined_content = await self.api_manager.refine_with_claude_with_retry(
                 piece.draft_content, content_type, f"{piece.type} - {piece.day}"
             )
             
@@ -2795,6 +3055,53 @@ Generate a {piece.type} about {piece.title} for {piece.day}:
         if essay_scores:
             md_content += f"**Average Essay Voice Score**: {sum(essay_scores)/len(essay_scores):.1f}/100\n"
         
+        # Topic alignment scores
+        md_content += "\n### Topic Alignment Analysis\n\n"
+        topic_scores = {}
+        for piece in content_pieces:
+            if piece.draft_content or piece.refined_content:
+                content_to_check = piece.refined_content or piece.draft_content
+                topic_score, _ = TopicValidator.validate_topic_alignment(content_to_check, piece.title)
+                topic_scores[f"{piece.type}_{piece.day}"] = topic_score
+
+        for item, score in topic_scores.items():
+            status = "✅" if score >= 85 else "⚠️" if score >= 70 else "❌"
+            md_content += f"- {status} {item}: {score:.1f}%\n"
+
+        # Mechanism density analysis
+        md_content += "\n### Mechanism Density Analysis\n\n"
+        mechanism_scores = {}
+        for piece in content_pieces:
+            if piece.draft_content or piece.refined_content:
+                content_to_check = piece.refined_content or piece.draft_content
+                mechanism_score, _ = VoiceValidator.validate_mechanism_density(content_to_check, piece.type)
+                mechanism_scores[f"{piece.type}_{piece.day}"] = mechanism_score
+
+        for item, score in mechanism_scores.items():
+            status = "✅" if score >= 80 else "⚠️" if score >= 60 else "❌"
+            md_content += f"- {status} {item}: {score:.1f}% mechanism density\n"
+
+        # Cross-day similarity analysis
+        md_content += "\n### Cross-Day Similarity Analysis\n\n"
+        similarities = ContentDeduplicator.check_cross_day_similarity(content_pieces)
+        if similarities:
+            md_content += "Similarity scores between content pieces:\n"
+            for days, similarity in similarities.items():
+                status = "✅" if similarity < 0.3 else "⚠️" if similarity < 0.5 else "❌"
+                md_content += f"- {status} {days}: {similarity:.1%} similar\n"
+        else:
+            md_content += "✅ No significant cross-day similarity detected\n"
+
+        # Hook repetition analysis
+        md_content += "\n### Hook Pattern Analysis\n\n"
+        repeated_hooks = ContentDeduplicator.check_hook_repetition(content_pieces)
+        if repeated_hooks:
+            md_content += "⚠️ **Repeated hook patterns detected:**\n"
+            for pattern, days in repeated_hooks.items():
+                md_content += f"- Pattern: '{pattern[:50]}...' used on: {', '.join(days)}\n"
+        else:
+            md_content += "✅ All hook patterns are unique\n"
+        
         # Flag any issues
         md_content += "\n### Voice Violations\n\n"
         violations_found = False
@@ -2896,6 +3203,87 @@ Generate a {piece.type} about {piece.title} for {piece.day}:
         self.logger.info(f"API Calls: {self.results.gemini_calls + self.results.claude_calls}")
         self.logger.info(f"Estimated Cost: ${self.results.total_cost:.2f}")
         self.logger.info(f"Report Saved: {report_path}")
+
+    async def _perform_quality_analysis(self, content_pieces: List[ContentPiece]):
+        """Perform comprehensive quality analysis including deduplication"""
+        
+        # 1. Cross-day similarity analysis
+        self.logger.info("📊 Analyzing cross-day similarity...")
+        similarities = ContentDeduplicator.check_cross_day_similarity(content_pieces)
+        
+        high_similarity_count = 0
+        for days, similarity in similarities.items():
+            if similarity > 0.7:
+                high_similarity_count += 1
+                self.logger.warning(f"⚠️  High similarity detected: {days} ({similarity:.1%})")
+            elif similarity > 0.5:
+                self.logger.info(f"🔶 Moderate similarity: {days} ({similarity:.1%})")
+        
+        if high_similarity_count == 0:
+            self.logger.info("✅ No high similarity detected between content pieces")
+        
+        # 2. Hook pattern analysis
+        self.logger.info("🎯 Analyzing hook patterns...")
+        repeated_hooks = ContentDeduplicator.check_hook_repetition(content_pieces)
+        
+        if repeated_hooks:
+            self.logger.warning(f"⚠️  {len(repeated_hooks)} repeated hook patterns detected")
+            for pattern, days in repeated_hooks.items():
+                self.logger.warning(f"   Pattern used on {', '.join(days)}: {pattern[:50]}...")
+        else:
+            self.logger.info("✅ All hook patterns are unique")
+        
+        # 3. Topic alignment validation
+        self.logger.info("🎯 Validating topic alignment...")
+        topic_issues = 0
+        for piece in content_pieces:
+            if piece.draft_content or piece.refined_content:
+                content_to_check = piece.refined_content or piece.draft_content
+                topic_score, issues = TopicValidator.validate_topic_alignment(content_to_check, piece.title)
+                
+                if topic_score < 70:
+                    topic_issues += 1
+                    self.logger.warning(f"⚠️  Low topic alignment: {piece.type}_{piece.day} ({topic_score:.1f}%)")
+                    if issues:
+                        self.logger.warning(f"     Issues: {', '.join(issues[:2])}")
+        
+        if topic_issues == 0:
+            self.logger.info("✅ All content pieces have good topic alignment")
+        
+        # 4. Mechanism density validation
+        self.logger.info("⚙️  Validating mechanism density...")
+        mechanism_issues = 0
+        for piece in content_pieces:
+            if piece.draft_content or piece.refined_content:
+                content_to_check = piece.refined_content or piece.draft_content
+                mechanism_score, issues = VoiceValidator.validate_mechanism_density(content_to_check, piece.type)
+                
+                if mechanism_score < 60:
+                    mechanism_issues += 1
+                    self.logger.warning(f"⚠️  Low mechanism density: {piece.type}_{piece.day} ({mechanism_score:.1f}%)")
+        
+        if mechanism_issues == 0:
+            self.logger.info("✅ All content pieces have sufficient mechanism density")
+        
+        # 5. Overall quality summary
+        total_pieces = len([p for p in content_pieces if p.status == "complete"])
+        quality_summary = {
+            'total_pieces': total_pieces,
+            'high_similarity_issues': high_similarity_count,
+            'repeated_hook_patterns': len(repeated_hooks),
+            'topic_alignment_issues': topic_issues,
+            'mechanism_density_issues': mechanism_issues
+        }
+        
+        total_issues = (high_similarity_count + len(repeated_hooks) + 
+                       topic_issues + mechanism_issues)
+        
+        if total_issues == 0:
+            self.logger.info("🏆 QUALITY ANALYSIS COMPLETE: No significant issues detected!")
+        else:
+            self.logger.warning(f"📊 QUALITY ANALYSIS COMPLETE: {total_issues} issues detected across {total_pieces} pieces")
+        
+        return quality_summary
 
 async def main():
     """Main execution function"""
